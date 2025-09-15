@@ -1,0 +1,200 @@
+Code to merge files
+'=====================================================================================
+' VBA Macro to Append Files
+' This module provides subroutines to:
+' 1. Select multiple files.
+' 2. Clear the selection.
+' 3. Pick a save location for the appended file.
+' 4. Append the data from selected files into a new workbook.
+'
+' The logic for appending is as follows:
+' - The first row of each selected file is ignored.
+' - The second row of the first selected file is used as the header for the final file.
+' - Data from the third row onwards of all selected files is appended.
+'=====================================================================================
+
+' Public variable to store the paths of selected files.
+' This makes the file list accessible to all subroutines in this module.
+Public SelectedFiles As New Collection
+' Public variable to store the user-selected save path.
+Public SavePath As String
+
+'-------------------------------------------------------------------------------------
+' Subroutine to handle the "Add files" button click (Cell B5)
+'-------------------------------------------------------------------------------------
+Sub Add_Files()
+    Dim fd As FileDialog
+    Dim fileSelected As Variant
+    Dim i As Integer
+    
+    ' Clear existing selection before adding new files
+    Call Clear_Selection
+    
+    ' Create a FileDialog object to allow the user to select files.
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    
+    ' Allow multiple files to be selected.
+    fd.AllowMultiSelect = True
+    
+    ' Show the dialog box.
+    If fd.Show = True Then
+        ' Loop through each file selected by the user.
+        For Each fileSelected In fd.SelectedItems
+            ' Add the full file path to the collection.
+            SelectedFiles.Add fileSelected
+        Next fileSelected
+        
+        ' Display the file names in the specified range (D5:D10).
+        ' The code will display up to 6 files.
+        i = 1
+        For Each fileSelected In SelectedFiles
+            ' Ensure we don't go past the designated display area.
+            If i <= 6 Then
+                ' Display just the file name, not the full path.
+                ' The full path is already stored in the collection.
+                Range("D" & 4 + i).Value = Mid(fileSelected, InStrRev(fileSelected, "\") + 1)
+                i = i + 1
+            End If
+        Next fileSelected
+    End If
+    
+    Set fd = Nothing
+End Sub
+
+'-------------------------------------------------------------------------------------
+' Subroutine to handle the "Clear selection" button click (Cell G11)
+'-------------------------------------------------------------------------------------
+Sub Clear_Selection()
+    ' Clear the collection of selected files.
+    ' This effectively removes all files from our list.
+    Dim i As Integer
+    Do While SelectedFiles.Count > 0
+        SelectedFiles.Remove 1
+    Loop
+    
+    ' Clear the displayed file names from the sheet.
+    Range("D5:D10").ClearContents
+End Sub
+
+'-------------------------------------------------------------------------------------
+' Subroutine to handle the "Pick save location" button click (Cell B13)
+'-------------------------------------------------------------------------------------
+Sub Pick_Save_Location()
+    Dim fd As FileDialog
+    
+    ' Create a FileDialog object for saving.
+    Set fd = Application.FileDialog(msoFileDialogSaveAs)
+    
+    ' Set a default file name for the user.
+    fd.InitialFileName = "Combined_Data.xlsx"
+    
+    ' Show the dialog box.
+    If fd.Show = True Then
+        ' Store the selected save path.
+        SavePath = fd.SelectedItems(1)
+        ' Display the selected path in cell B13.
+        Range("B13").Value = SavePath
+    End If
+    
+    Set fd = Nothing
+End Sub
+
+'-------------------------------------------------------------------------------------
+' Subroutine to handle the "Append Files" button click (Cell E16)
+' This is the main logic for combining the files.
+'-------------------------------------------------------------------------------------
+Sub Append_Files()
+    Dim NewWorkbook As Workbook
+    Dim ws As Worksheet
+    Dim wb As Workbook
+    Dim filePath As Variant
+    Dim lastRow As Long
+    Dim lastRowNew As Long
+    
+    ' Check if files have been selected.
+    If SelectedFiles.Count = 0 Then
+        MsgBox "Please select at least one file to append.", vbExclamation, "No Files Selected"
+        Exit Sub
+    End If
+    
+    ' Check if a save location has been chosen.
+    If SavePath = "" Then
+        MsgBox "Please select a save location.", vbExclamation, "No Save Location"
+        Exit Sub
+    End If
+    
+    ' Turn off screen updating and alerts to improve performance.
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    On Error GoTo ErrorHandler
+    
+    ' Create a new workbook to store the combined data.
+    Set NewWorkbook = Workbooks.Add
+    Set ws = NewWorkbook.Sheets(1)
+    
+    ' Process the first file to get the header.
+    Set wb = Workbooks.Open(SelectedFiles.Item(1), ReadOnly:=True)
+    
+    ' Copy the second row of the first file to be the header.
+    wb.Sheets(1).Rows(2).Copy Destination:=ws.Rows(1)
+    
+    ' Copy data from the third row onwards.
+    lastRow = wb.Sheets(1).Cells(wb.Sheets(1).Rows.Count, "A").End(xlUp).Row
+    If lastRow >= 3 Then
+        wb.Sheets(1).Range("A3:ZZ" & lastRow).Copy
+        ' Paste only the values to avoid pasting hidden formatting that can cause a row of zeros.
+        ws.Cells(ws.Rows.Count, "A").End(xlUp).Offset(1, 0).PasteSpecial xlPasteValues
+    End If
+    
+    wb.Close SaveChanges:=False
+    
+    ' Loop through the rest of the selected files (from the second file onwards).
+    For i = 2 To SelectedFiles.Count
+        ' Open the next workbook.
+        Set wb = Workbooks.Open(SelectedFiles.Item(i), ReadOnly:=True)
+        
+        ' Find the last row of data in the current file.
+        lastRow = wb.Sheets(1).Cells(wb.Sheets(1).Rows.Count, "A").End(xlUp).Row
+        
+        ' Find the last row in the new workbook.
+        lastRowNew = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+        
+        ' Check if there is data to copy (i.e., more than just the first two rows).
+        If lastRow > 2 Then
+            ' Copy data from the third row onwards.
+            wb.Sheets(1).Range("A3:ZZ" & lastRow).Copy
+            
+            ' Paste the data into the next empty row in the new workbook.
+            ' Paste only the values to avoid pasting hidden formatting.
+            ws.Cells(ws.Rows.Count, "A").End(xlUp).Offset(1, 0).PasteSpecial xlPasteValues
+        End If
+        
+        ' Close the source workbook without saving changes.
+        wb.Close SaveChanges:=False
+    Next i
+    
+    ' Save the new combined workbook to the specified location.
+    NewWorkbook.SaveAs SavePath
+    NewWorkbook.Close SaveChanges:=False
+    
+    MsgBox "All files have been successfully appended to " & SavePath, vbInformation, "Operation Complete"
+    
+    ' Reset the application settings and clear the path.
+    Range("B13").ClearContents
+    SavePath = ""
+    
+    GoTo CleanExit
+    
+ErrorHandler:
+    MsgBox "An error occurred: " & Err.Description, vbCritical, "Error"
+    
+CleanExit:
+    ' Restore screen updating and alerts.
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    Set wb = Nothing
+    Set ws = Nothing
+    Set NewWorkbook = Nothing
+End Sub
